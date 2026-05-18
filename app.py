@@ -6,35 +6,49 @@ from datetime import datetime
 
 st.set_page_config(page_title="Acolhimento", layout="wide", page_icon="🕊️")
 
-# ===================== CONFIGURAÇÃO APPS SCRIPT =====================
-APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxOmy4kMfnshulEpMlt41z8vMSWH6IT7sUnWo3UPXlUiKBIGdiPzlYwI8VMJuVBlyTc/exec"
+# ===================== CONFIGURAÇÃO =====================
+APPS_SCRIPT_URL = st.secrets["apps_script"]["url"]
 
 def call_apps_script(action, payload):
     try:
         response = requests.post(
             APPS_SCRIPT_URL,
             json={"action": action, **payload},
-            timeout=30
+            timeout=25
         )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            st.error(f"Erro na API: {response.status_code}")
-            return None
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
-        st.error(f"Erro de conexão: {e}")
+        st.error(f"Erro de conexão com Apps Script: {e}")
         return None
 
-# ===================== LOGIN MULTI-IGREJA =====================
+# ===================== LOGIN =====================
 def login():
     st.title("🕊️ Sistema de Acolhimento")
-    st.subheader("Bem-vindo!")
+    st.subheader("Selecione sua igreja e faça login")
 
-    # Carregar igrejas do Master Sheet
+    # Carregar igrejas
+    igrejas = call_apps_script("getData", {
+        "spreadsheetUrl": st.secrets["gsheets"]["master_spreadsheet_url"],
+        "sheetName": "Igrejas"
+    })
+
+    if not igrejas or isinstance(igrejas, dict) and "error" in igrejas:
+        st.error("Não foi possível carregar as igrejas.")
+        st.stop()
+
+    df_igrejas = pd.DataFrame(igrejas)
+    df_igrejas = df_igrejas[df_igrejas['ativo'] == True]
+
     igreja_nome = st.selectbox(
-        "Selecione sua Igreja",
-        options=["Igreja Teste"]  # Vamos melhorar isso em breve
+        "Igreja",
+        options=df_igrejas['nome_igreja'].tolist()
     )
+
+    igreja = df_igrejas[df_igrejas['nome_igreja'] == igreja_nome].iloc[0]
+
+    st.session_state.igreja_nome = igreja['nome_igreja']
+    st.session_state.spreadsheet_url = igreja['spreadsheet_url']
 
     st.divider()
 
@@ -42,55 +56,72 @@ def login():
     with col1:
         username = st.text_input("Usuário")
         senha = st.text_input("Senha", type="password")
-        
-        if st.button("Entrar", type="primary", use_container_width=True):
-            # Por enquanto vamos simular o login
-            # Depois conectamos com a aba Usuários_App
-            if username and senha:
-                st.session_state.logged_in = True
-                st.session_state.username = username
-                st.session_state.nome = "Usuário Teste"
-                st.session_state.role = "admin"
-                st.session_state.nome_igreja = igreja_nome
-                st.success(f"Bem-vindo(a), {username}!")
-                st.rerun()
-            else:
-                st.error("Preencha usuário e senha")
 
-# ===================== MAIN =====================
+        if st.button("Entrar", type="primary", use_container_width=True):
+            if not username or not senha:
+                st.error("Preencha usuário e senha")
+                st.stop()
+
+            # Buscar usuários
+            usuarios = call_apps_script("getData", {
+                "spreadsheetUrl": st.session_state.spreadsheet_url,
+                "sheetName": "Usuários_App"
+            })
+
+            if usuarios:
+                df_usuarios = pd.DataFrame(usuarios)
+                usuario = df_usuarios[
+                    (df_usuarios['username'] == username) & 
+                    (df_usuarios.get('ativo') == True)
+                ]
+
+                if not usuario.empty:
+                    hash_armazenado = str(usuario.iloc[0]['senha_hash'])
+                    if bcrypt.checkpw(senha.encode('utf-8'), hash_armazenado.encode('utf-8')):
+                        st.session_state.logged_in = True
+                        st.session_state.username = username
+                        st.session_state.nome = usuario.iloc[0]['nome_completo']
+                        st.session_state.role = usuario.iloc[0]['role']
+                        st.success(f"✅ Bem-vindo(a), {st.session_state.nome}!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Senha incorreta")
+                else:
+                    st.error("Usuário não encontrado ou inativo")
+            else:
+                st.error("Erro ao carregar usuários")
+
+# ===================== MAIN APP =====================
 def main():
     if 'logged_in' not in st.session_state or not st.session_state.logged_in:
         login()
         st.stop()
 
-    st.sidebar.success(f"🏠 {st.session_state.get('nome_igreja', 'Igreja')}")
-    st.sidebar.success(f"👋 {st.session_state.get('nome', 'Usuário')}")
+    # Sidebar
+    st.sidebar.success(f"🏠 {st.session_state.get('igreja_nome', '')}")
+    st.sidebar.success(f"👋 {st.session_state.get('nome', '')}")
+    st.sidebar.caption(f"Função: **{st.session_state.get('role', '').upper()}**")
 
     if st.sidebar.button("Sair"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
 
-    pagina = st.sidebar.selectbox(
-        "Módulos", 
-        ["Dashboard", "Visitantes", "Novos Membros", "Pessoas Afastadas"]
-    )
+    # Menu
+    opcoes = ["Dashboard", "Visitantes", "Novos Membros", "Pessoas Afastadas"]
+    if st.session_state.role == "admin":
+        opcoes.append("Admin")
+
+    pagina = st.sidebar.selectbox("Módulos", opcoes)
 
     if pagina == "Dashboard":
-        st.title("📊 Dashboard")
-        st.info("Sistema conectado via Apps Script ✅")
-        st.write("Pronto para começar a implementar os módulos.")
+        st.title(f"📊 Dashboard - {st.session_state.igreja_nome}")
+        st.success("✅ Conectado com Apps Script")
+        st.info("Estamos prontos para construir os módulos.")
 
     elif pagina == "Visitantes":
         st.title("👥 Visitantes")
-        st.success("Módulo Visitantes - Vamos implementar agora?")
-        
-        if st.button("Testar conexão com Planilha"):
-            resultado = call_apps_script("getData", {
-                "spreadsheetUrl": st.secrets.get("gsheets", {}).get("spreadsheet_url", ""),
-                "sheetName": "Visitantes"
-            })
-            st.write(resultado)
+        st.write("Módulo de Visitantes será implementado agora.")
 
 if __name__ == "__main__":
     main()
