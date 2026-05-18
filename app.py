@@ -27,18 +27,23 @@ def login():
     st.title("🕊️ Sistema de Acolhimento")
     st.subheader("Selecione sua igreja e faça login")
 
-    # Carregar igrejas
-    igrejas = call_apps_script("getData", {
+    # === Carregar igrejas ===
+    igrejas_raw = call_apps_script("getData", {
         "spreadsheetUrl": st.secrets["gsheets"]["master_spreadsheet_url"],
         "sheetName": "Igrejas"
     })
 
-    if not igrejas or isinstance(igrejas, dict) and "error" in igrejas:
-        st.error("Não foi possível carregar as igrejas.")
+    if not igrejas_raw or (isinstance(igrejas_raw, dict) and "error" in igrejas_raw):
+        st.error("❌ Não foi possível carregar a lista de igrejas.")
+        st.info("Verifique se a aba 'Igrejas' existe e tem dados.")
         st.stop()
 
-    df_igrejas = pd.DataFrame(igrejas)
-    df_igrejas = df_igrejas[df_igrejas['ativo'] == True]
+    df_igrejas = pd.DataFrame(igrejas_raw)
+    df_igrejas = df_igrejas[df_igrejas.get('ativo') == True]
+
+    if df_igrejas.empty:
+        st.error("Nenhuma igreja ativa encontrada.")
+        st.stop()
 
     igreja_nome = st.selectbox(
         "Igreja",
@@ -60,36 +65,42 @@ def login():
         if st.button("Entrar", type="primary", use_container_width=True):
             if not username or not senha:
                 st.error("Preencha usuário e senha")
-                st.stop()
+                return
 
-            # Buscar usuários
-            usuarios = call_apps_script("getData", {
+            # === Carregar usuários ===
+            usuarios_raw = call_apps_script("getData", {
                 "spreadsheetUrl": st.session_state.spreadsheet_url,
                 "sheetName": "Usuários_App"
             })
 
-            if usuarios:
-                df_usuarios = pd.DataFrame(usuarios)
-                usuario = df_usuarios[
-                    (df_usuarios['username'] == username) & 
-                    (df_usuarios.get('ativo') == True)
-                ]
+            if not usuarios_raw or (isinstance(usuarios_raw, dict) and "error" in usuarios_raw):
+                st.error(f"❌ Erro ao carregar usuários: {usuarios_raw.get('error', 'Desconhecido')}")
+                return
 
-                if not usuario.empty:
-                    hash_armazenado = str(usuario.iloc[0]['senha_hash'])
-                    if bcrypt.checkpw(senha.encode('utf-8'), hash_armazenado.encode('utf-8')):
-                        st.session_state.logged_in = True
-                        st.session_state.username = username
-                        st.session_state.nome = usuario.iloc[0]['nome_completo']
-                        st.session_state.role = usuario.iloc[0]['role']
-                        st.success(f"✅ Bem-vindo(a), {st.session_state.nome}!")
-                        st.rerun()
-                    else:
-                        st.error("❌ Senha incorreta")
+            df_usuarios = pd.DataFrame(usuarios_raw)
+
+            if df_usuarios.empty:
+                st.error("Nenhum usuário cadastrado.")
+                return
+
+            usuario = df_usuarios[
+                (df_usuarios['username'] == username) & 
+                (df_usuarios.get('ativo', True) == True)
+            ]
+
+            if not usuario.empty:
+                hash_armazenado = str(usuario.iloc[0]['senha_hash']).strip()
+                if bcrypt.checkpw(senha.encode('utf-8'), hash_armazenado.encode('utf-8')):
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.session_state.nome = usuario.iloc[0]['nome_completo']
+                    st.session_state.role = usuario.iloc[0]['role']
+                    st.success(f"✅ Bem-vindo(a), {st.session_state.nome}!")
+                    st.rerun()
                 else:
-                    st.error("Usuário não encontrado ou inativo")
+                    st.error("❌ Senha incorreta")
             else:
-                st.error("Erro ao carregar usuários")
+                st.error("❌ Usuário não encontrado ou inativo")
 
 # ===================== MAIN APP =====================
 def main():
